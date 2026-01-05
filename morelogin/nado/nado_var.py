@@ -599,6 +599,22 @@ def check_order_status(page, order_price, symbol):
         return None
 
 
+def safe_sleep(seconds):
+    """
+    安全休眠函数，将长时间休眠拆分成多个短时间等待，以便能够响应 Ctrl+C
+    
+    Args:
+        seconds: 休眠总秒数
+    
+    Raises:
+        KeyboardInterrupt: 如果被中断，会抛出异常
+    """
+    chunk_seconds = 0.1  # 每次等待0.1秒，更频繁地检查中断
+    chunks = int(seconds / chunk_seconds)
+    for _ in range(chunks):
+        time.sleep(chunk_seconds)
+
+
 def monitor_order_fill(page, symbol, initial_position, check_interval=0.5, max_wait_time=30, retry_timeout=30):
     """
     监控订单是否成交（通过比较持仓变化）
@@ -614,30 +630,41 @@ def monitor_order_fill(page, symbol, initial_position, check_interval=0.5, max_w
     Returns:
         bool: 是否完全成交
         None: 如果retry_timeout内未成交，需要重新下单
+    
+    Raises:
+        KeyboardInterrupt: 如果被 Ctrl+C 中断，会抛出异常
     """
     start_time = time.time()
     print(f"监控订单是否成交")
-    while True:
-        elapsed_time = time.time() - start_time
-        
-        if elapsed_time >= retry_timeout:
-            return None
-        
-        if elapsed_time > max_wait_time:
-            return False
-        
-        try:
-            current_position = get_nado_position(page, symbol)
-            if current_position != initial_position:
-                print(f"订单已成交: {initial_position} -> {current_position}")
-                return True
-        except Exception:
-            pass
-        
-        if elapsed_time < max_wait_time:
-            page.wait_for_timeout(int(check_interval * 1000))
-        else:
-            break
+    try:
+        while True:
+            elapsed_time = time.time() - start_time
+            
+            if elapsed_time >= retry_timeout:
+                return None
+            
+            if elapsed_time > max_wait_time:
+                return False
+            
+            try:
+                current_position = get_nado_position(page, symbol)
+                if current_position != initial_position:
+                    print(f"订单已成交: {initial_position} -> {current_position}")
+                    return True
+            except KeyboardInterrupt:
+                # 如果获取持仓时被中断，直接抛出
+                raise
+            except Exception:
+                pass
+            
+            if elapsed_time < max_wait_time:
+                # 使用 time.sleep 替代 page.wait_for_timeout，以便能够响应 Ctrl+C
+                safe_sleep(check_interval)
+            else:
+                break
+    except KeyboardInterrupt:
+        # 捕获 KeyboardInterrupt 并重新抛出，让上层处理
+        raise
     
     return False
 
@@ -899,7 +926,7 @@ def fill_nado_order_form(page, order_price, size):
     else:
         print("未找到价格输入框")
         return False
-    page.wait_for_timeout(300)
+    safe_sleep(0.3)  # 等待0.3秒，可中断
     
     size_input = page.query_selector('#size')
     if size_input:
@@ -907,7 +934,7 @@ def fill_nado_order_form(page, order_price, size):
     else:
         print("未找到大小输入框")
         return False
-    page.wait_for_timeout(300)
+    safe_sleep(0.3)  # 等待0.3秒，可中断
     
     return True
 
@@ -926,35 +953,53 @@ def execute_nado_order_with_retry(page, symbol, size, price_offset, direction, m
     
     Returns:
         bool: 是否完全成交
+    
+    Raises:
+        KeyboardInterrupt: 如果被 Ctrl+C 中断，会抛出异常
     """
     retry_count = 0
     
-    while retry_count < max_retries:
-        if retry_count > 0:
-            print(f"\n🔄 第 {retry_count} 次重新下单...")
-            cancel_all_orders(page, symbol)
-            page.wait_for_timeout(1000)  # 等待1秒，避免API限流
-        
-        # 重新获取交易对价格，计算订单价格
-        if retry_count > 0:
-            print("  重新获取价格...")
-        price_num, order_price = get_and_calculate_order_price(page, symbol, price_offset, direction)
-        if price_num is None:
-            return False
-        
-        initial_position = get_nado_position(page, symbol)
-        
-        if not execute_nado_order(page, symbol, order_price, size, direction):
-            return False
-        
-        result = monitor_order_fill(page, symbol, initial_position, check_interval=0.5, max_wait_time=300, retry_timeout=30)
-        
-        if result is True:
-            return True
-        elif result is None:
-            retry_count += 1
-        else:
-            return False
+    try:
+        while retry_count < max_retries:
+            if retry_count > 0:
+                print(f"\n第 {retry_count} 次重新下单...")
+                cancel_all_orders(page, symbol)
+                safe_sleep(1)  # 等待1秒，避免API限流
+            else:
+                print("\n开始下单流程...")
+            
+            # 每次重新获取交易对价格，计算订单价格
+            print("  获取最新价格...")
+            price_num, order_price = get_and_calculate_order_price(page, symbol, price_offset, direction)
+            if price_num is None:
+                print("获取价格失败，停止下单")
+                return False
+            
+            # 获取当前持仓作为基准
+            initial_position = get_nado_position(page, symbol)
+            
+            # 执行下单
+            if not execute_nado_order(page, symbol, order_price, size, direction):
+                print("下单失败")
+                return False
+            
+            # 监控订单是否成交
+            result = monitor_order_fill(page, symbol, initial_position, check_interval=0.5, max_wait_time=300, retry_timeout=30)
+            
+            if result is True:
+                print("订单已成交")
+                return True
+            elif result is None:
+                # 超时未成交，需要重新下单
+                retry_count += 1
+                print(f"订单未在30秒内成交，准备重新下单...")
+            else:
+                # 其他情况，停止重试
+                print("订单监控超时，停止重试")
+                return False
+    except KeyboardInterrupt:
+        # 捕获 KeyboardInterrupt 并重新抛出，让上层处理
+        raise
     
     print(f"\n❌ 已达到最大重试次数 ({max_retries})，停止重试")
     return False
@@ -977,7 +1022,7 @@ def execute_nado_order(page, symbol, order_price, size, direction):
     if not click_limit_button(page):
         print("Limit按钮点击失败")
         return False
-    page.wait_for_timeout(500)
+    safe_sleep(0.5)  # 等待0.5秒，可中断
     
     if direction == "long":
         if not click_long_tab_button(page):
@@ -987,7 +1032,7 @@ def execute_nado_order(page, symbol, order_price, size, direction):
         if not click_short_tab_button(page):
             print("做空标签按钮点击失败")
             return False
-    page.wait_for_timeout(500)
+    safe_sleep(0.5)  # 等待0.5秒，可中断
     
     if not fill_nado_order_form(page, order_price, size):
         return False
@@ -1024,7 +1069,6 @@ def method1(pages, configs):
     price_offset = float(config.get('price_offset', '-5'))
     
     print(f"\n开始执行做多Nado操作 - {symbol}")
-    print("=" * 50)
     
     # 执行Nado下单流程（带重试逻辑）
     is_filled = execute_nado_order_with_retry(nado_page, symbol, size, price_offset, "long", max_retries=999)
@@ -1129,7 +1173,7 @@ def method3(pages, configs):
         if i < repeat_count:
             sleep_time = random.randint(sleep_min, sleep_max)
             print(f"\n等待 {sleep_time} 秒后继续下一次执行...")
-            time.sleep(sleep_time)
+            safe_sleep(sleep_time)
     
     print(f"已完成 {repeat_count} 次执行")
 
@@ -1195,7 +1239,7 @@ def method4(pages, configs):
         if i < repeat_count:
             sleep_time = random.randint(sleep_min, sleep_max)
             print(f"\n等待 {sleep_time} 秒后继续下一次执行...")
-            time.sleep(sleep_time)
+            safe_sleep(sleep_time)
     
     print(f"已完成 {repeat_count} 次执行")
 
@@ -1248,7 +1292,7 @@ def method5(pages, configs):
         # 步骤2: 休眠随机秒数
         sleep_time = random.randint(sleep_min, sleep_max)
         print(f"\n[步骤2] 等待 {sleep_time} 秒...")
-        time.sleep(sleep_time)
+        safe_sleep(sleep_time)
         
         # 步骤3: 单次做空Nado做多Variational
         print(f"\n[步骤3] 执行做空Nado做多Variational操作")
@@ -1262,7 +1306,7 @@ def method5(pages, configs):
         # 休眠后继续下一轮循环
         sleep_time = random.randint(sleep_min, sleep_max)
         print(f"\n等待 {sleep_time} 秒后继续下一轮循环...")
-        time.sleep(sleep_time)
+        safe_sleep(sleep_time)
 
 
 def get_nado_position(page, symbol):
@@ -1280,9 +1324,7 @@ def get_nado_position(page, symbol):
         # 查找持仓按钮，优先查找text-negative（做空）或text-positive（做多）
         selectors = [
             'button.text-negative',
-            'button.text-positive',
-            'button:has-text("BTC")',
-            'button:has-text("ETH")'
+            'button.text-positive'
         ]
         
         for selector in selectors:

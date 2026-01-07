@@ -1,6 +1,6 @@
 exchange:
   exchange_name: standx
-  private_key: ""
+  # 私钥通过环境变量STANDX_PRIVATE_KEY配置，请在.env文件中设置
   chain: bsc
 
 symbol: BTC-USD
@@ -11,5 +11,5 @@ grid:
   price_step: 5
   grid_count: 5
   price_spread: 50
-  order_quantity: 0.0001
+  order_quantity: 0.01
   sleep_interval: 1

@@ -3,3 +3,6 @@
 strategys/strategy_standx/config.yaml
 strategys/strategy_standx/config.yaml
 *.pyc
+
+.venv*
+.env

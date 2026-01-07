@@ -5,6 +5,10 @@ StandX 交易脚本
 """
 import sys
 import os
+from dotenv import load_dotenv
+
+# 加载.env文件
+load_dotenv()
 
 # 添加项目路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -16,8 +20,10 @@ from eth_account import Account
 from web3 import Web3
 
 # ==================== 配置区域 ====================
-# 钱包私钥（请替换为你的私钥）
-PRIVATE_KEY = ""
+# 钱包私钥从环境变量读取
+PRIVATE_KEY = os.getenv('STANDX_PRIVATE_KEY')
+if not PRIVATE_KEY:
+    raise ValueError("请在.env文件中设置STANDX_PRIVATE_KEY环境变量")
 
 # 交易配置
 CHAIN = "bsc"  # 或 "solana"

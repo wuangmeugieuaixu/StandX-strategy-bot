@@ -7,6 +7,10 @@ import os
 import yaml
 import time
 from decimal import Decimal
+from dotenv import load_dotenv
+
+# 加载.env文件
+load_dotenv()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -20,6 +24,11 @@ with open(config_path, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 STANDX_CONFIG = config['exchange']
+# 从环境变量读取私钥
+STANDX_CONFIG['private_key'] = os.getenv('STANDX_PRIVATE_KEY')
+if not STANDX_CONFIG['private_key']:
+    raise ValueError("请在.env文件中设置STANDX_PRIVATE_KEY环境变量")
+
 SYMBOL = config['symbol']
 GRID_CONFIG = config['grid']
 

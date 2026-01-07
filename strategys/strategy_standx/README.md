@@ -125,12 +125,33 @@ pip install -r requirements.txt
 
 ## ⚙️ 配置
 
+### 1. 配置私钥
+
+复制 `.env.example` 文件为 `.env`：
+
+```bash
+# Linux / Mac
+cp .env.example .env
+
+# Windows
+copy .env.example .env
+```
+
+编辑 `.env` 文件，填入你的私钥：
+
+```env
+# StandX 私钥配置
+STANDX_PRIVATE_KEY=your_private_key_here
+```
+
+### 2. 配置策略参数
+
 编辑 `config.yaml` 文件：
 
 ```yaml
 exchange:
   exchange_name: standx
-  private_key: "你的私钥"  # 替换为你的 StandX 私钥
+  # 私钥通过环境变量STANDX_PRIVATE_KEY配置，请在.env文件中设置
   chain: bsc              # 或 "solana"
 
 symbol: BTC-USD          # 交易对
@@ -147,6 +168,7 @@ grid:
 
 ### 参数说明
 
+- `private_key`: **现已改为环境变量配置，在.env文件中设置**
 - `price_step`: 网格价格间隔
 - `grid_count`: 每个方向的网格数量
 - `price_spread`: 当前价格与网格中心的距离

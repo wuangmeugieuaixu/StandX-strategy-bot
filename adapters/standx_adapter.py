@@ -471,6 +471,53 @@ class StandXAdapter(BasePerpAdapter):
         except Exception as e:
             raise Exception(f"获取价格失败: {e}")
     
+    def close_position(
+        self,
+        symbol: str,
+        order_type: str = "market",
+        price: Optional[Decimal] = None,
+    ) -> Optional[Order]:
+        """
+        平仓（便捷方法）
+        
+        Args:
+            symbol: 交易对符号
+            order_type: 订单类型，"limit" 或 "market"
+            price: 限价单价格（限价单必填）
+            
+        Returns:
+            Optional[Order]: 订单信息，如果没有持仓则返回 None
+        """
+        position = self.get_position(symbol)
+        if not position or position.size == Decimal("0"):
+            return None
+        
+        # 确定平仓方向（与持仓相反）
+        if position.side in ["long", "buy"]:
+            close_side = "sell"
+        else:
+            close_side = "buy"
+        
+        if order_type == "market":
+            return self.place_order(
+                symbol=symbol,
+                side=close_side,
+                order_type="market",
+                quantity=abs(position.size),
+                reduce_only=True,
+            )
+        else:
+            if price is None:
+                raise ValueError("限价单必须指定价格")
+            return self.place_order(
+                symbol=symbol,
+                side=close_side,
+                order_type="limit",
+                quantity=abs(position.size),
+                price=price,
+                reduce_only=True,
+            )
+
     def get_orderbook(
         self,
         symbol: str,

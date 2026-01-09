@@ -17,6 +17,7 @@ project_root = os.path.dirname(os.path.dirname(current_dir))
 sys.path.insert(0, project_root)
 
 from adapters import create_adapter
+from helpers.logger import TradingLogger
 
 config_path = os.path.join(current_dir, "config.yaml")
 
@@ -31,6 +32,13 @@ if not STANDX_CONFIG['private_key']:
 
 SYMBOL = config['symbol']
 GRID_CONFIG = config['grid']
+
+# 初始化日志记录器
+logger = TradingLogger(
+    exchange="standx",
+    ticker=SYMBOL.replace('-', '_'),  # 将 BTC-USD 转换为 BTC_USD
+    log_to_console=True
+)
 
 
 def generate_grid_arrays(current_price, price_step, grid_count, price_spread):
@@ -191,6 +199,7 @@ def place_orders_by_prices(place_long, place_short, adapter, symbol, quantity):
             print(f"[下单成功][多单] 价格={price}, 数量={quantity_decimal}, 订单ID={getattr(order, 'order_id', None)}")
         except Exception as e:
             print(f"[下单失败][多单] 价格={price}, 数量={quantity_decimal}, 错误={e}")
+            logger.log(f"✗ 挂买单失败: {quantity_decimal} @ {price}, 错误: {e}", "ERROR")
     
     # 做空订单：sell
     for price in place_short:
@@ -207,6 +216,7 @@ def place_orders_by_prices(place_long, place_short, adapter, symbol, quantity):
             print(f"[下单成功][空单] 价格={price}, 数量={quantity_decimal}, 订单ID={getattr(order, 'order_id', None)}")
         except Exception as e:
             print(f"[下单失败][空单] 价格={price}, 数量={quantity_decimal}, 错误={e}")
+            logger.log(f"✗ 挂卖单失败: {quantity_decimal} @ {price}, 错误: {e}", "ERROR")
 
 
 def calculate_cancel_orders(target_long, target_short, current_long, current_short):
@@ -269,15 +279,70 @@ def close_position_if_exists(adapter, symbol):
         symbol: 交易对符号
     """
     try:
+        print("[持仓检查] 查询持仓中...")
+        # logger.log("开始检查持仓状态")
         position = adapter.get_position(symbol)
-        if position and position.size != Decimal("0"):
-            print(f"检测到持仓: {position.size} {position.side}, 市价平仓中...")
-            adapter.close_position(symbol, order_type="market")
-            print("平仓完成")
-        # 如果 position 为 None，说明 StandX 适配器的持仓查询接口可能未实现
+        
+        if position is None:
+            print("[持仓检查] 无持仓数据（接口可能未实现或无持仓）")
+            logger.log("持仓查询返回None")
+            return
+        
+        if position.size == Decimal("0"):
+            print("[持仓检查] ✓ 持仓为0，无需平仓")
+            logger.log("持仓检查：无持仓")
+            return
+        
+        # 发现持仓，立即平仓
+        print(f"[持仓检查] ⚠️  检测到持仓: {position.size} {position.side.upper()}, 入场价: {position.entry_price}")
+        logger.log(f"[WARNING] 检测到意外持仓: {position.side} {position.size} @ {position.entry_price}", "WARNING")
+        
+        # 记录持仓到交易日志
+        logger.log_transaction(
+            order_id="POSITION_DETECTED",
+            side=position.side.upper(),
+            quantity=position.size,
+            price=position.entry_price,
+            status="UNEXPECTED_POSITION"
+        )
+        
+        print(f"[持仓平仓] 立即市价平仓...")
+        logger.log("开始执行市价平仓")
+        
+        # 获取当前市价作为平仓价格参考
+        try:
+            price_info = adapter.get_ticker(symbol)
+            market_price = price_info.get('last_price') or price_info.get('mid_price') or price_info.get('mark_price') or 0
+            market_price_decimal = Decimal(str(market_price))
+        except Exception:
+            market_price_decimal = Decimal("0")  # 如果获取价格失败，使用0作为占位符
+        
+        try:
+            result = adapter.close_position(symbol, order_type="market")
+            print(f"[持仓平仓] ✓ 平仓完成! 订单ID: {getattr(result, 'order_id', 'N/A')}")
+            logger.log(f"[SUCCESS] 市价平仓成功，订单ID: {getattr(result, 'order_id', 'N/A')}, 市价: {market_price_decimal}")
+            
+            # 记录平仓到交易日志（使用当前市价作为价格参考）
+            logger.log_transaction(
+                order_id=getattr(result, 'order_id', 'UNKNOWN'),
+                side="CLOSE_" + position.side.upper(),
+                quantity=position.size,
+                price=market_price_decimal,
+                status="MARKET_CLOSE"
+            )
+            
+        except Exception as close_error:
+            print(f"[持仓平仓] ✗ 平仓失败: {close_error}")
+            logger.log(f"[ERROR] 市价平仓失败: {close_error}", "ERROR")
+            raise
+            
+    except NotImplementedError:
+        print("[持仓检查] 适配器未实现持仓查询接口")
+        logger.log("持仓查询接口未实现")
     except Exception as e:
-        # 如果持仓查询失败，静默处理（StandX 可能没有持仓查询接口）
-        pass
+        # 其他异常需要显示出来
+        print(f"[持仓检查] ✗ 错误: {type(e).__name__}: {e}")
+        logger.log(f"持仓检查错误: {type(e).__name__}: {e}", "ERROR")
 
 
 def run_strategy_cycle(adapter):
@@ -286,6 +351,11 @@ def run_strategy_cycle(adapter):
     Args:
         adapter: 适配器实例
     """
+    logger.log("=== 开始策略循环 ===")
+    
+    # 优先检查并平仓，避免持仓风险
+    close_position_if_exists(adapter, SYMBOL)
+    
     price_info = adapter.get_ticker(SYMBOL)
     last_price = price_info.get('last_price') or price_info.get('mid_price') or price_info.get('mark_price')
     print(f"{SYMBOL} 价格: {last_price:.2f}")
@@ -333,13 +403,19 @@ def run_strategy_cycle(adapter):
 
 def main():
     try:
+        logger.log("=== StandX 做市策略启动 ===")
+        logger.log(f"交易对: {SYMBOL}")
+        logger.log(f"网格配置: {GRID_CONFIG}")
+        
         adapter = create_adapter(STANDX_CONFIG)
         adapter.connect()
+        logger.log("适配器连接成功")
         
         sleep_interval = GRID_CONFIG.get('sleep_interval', 60)
         
         print("策略开始运行，按 Ctrl+C 停止...")
         print(f"休眠间隔: {sleep_interval} 秒\n")
+        logger.log(f"策略开始运行，休眠间隔: {sleep_interval}秒")
         
         while True:
             try:
@@ -348,14 +424,17 @@ def main():
                 time.sleep(sleep_interval)
             except KeyboardInterrupt:
                 print("\n\n策略已停止")
+                logger.log("=== 策略手动停止 ===")
                 break
             except Exception as e:
                 print(f"策略循环错误: {e}")
+                logger.log(f"策略循环错误: {e}", "ERROR")
                 print(f"等待 {sleep_interval} 秒后重试...\n")
                 time.sleep(sleep_interval)
         
     except Exception as e:
         print(f"错误: {e}")
+        logger.log(f"策略启动失败: {e}", "ERROR")
         return None
 
 

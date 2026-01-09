@@ -1,8 +1,9 @@
 /venv
 .DS_Store
-strategys/strategy_standx/config.yaml
-strategys/strategy_standx/config.yaml
 *.pyc
 
 .venv*
 .env
+strategys/strategy_standx/config.yaml
+.idea
+/logs

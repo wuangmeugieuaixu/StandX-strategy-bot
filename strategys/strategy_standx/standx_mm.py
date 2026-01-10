@@ -6,6 +6,7 @@ import sys
 import os
 import yaml
 import time
+import argparse
 from decimal import Decimal
 from dotenv import load_dotenv
 
@@ -19,16 +20,48 @@ sys.path.insert(0, project_root)
 from adapters import create_adapter
 from helpers.logger import TradingLogger
 
+
+def parse_arguments():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='StandX 做市策略')
+    parser.add_argument(
+        '--account', 
+        type=str, 
+        default='01',
+        help='指定使用的钱包账户编号 (如: 01, 02, 03等)，默认为01'
+    )
+    return parser.parse_args()
+
+
+def load_private_key(account_id):
+    """根据账户ID加载私钥"""
+    # 确保账户ID是两位数格式
+    if len(account_id) == 1:
+        account_id = f"0{account_id}"
+    
+    env_key = f'STANDX_PRIVATE_KEY_{account_id}'
+    private_key = os.getenv(env_key)
+    
+    if not private_key:
+        raise ValueError(f"请在.env文件中设置 {env_key} 环境变量")
+    
+    if private_key.startswith('your_private_key_here'):
+        raise ValueError(f"请在.env文件中为 {env_key} 设置真实的私钥")
+    
+    return private_key
+
+
+# 解析命令行参数
+args = parse_arguments()
+
 config_path = os.path.join(current_dir, "config.yaml")
 
 with open(config_path, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 STANDX_CONFIG = config['exchange']
-# 从环境变量读取私钥
-STANDX_CONFIG['private_key'] = os.getenv('STANDX_PRIVATE_KEY')
-if not STANDX_CONFIG['private_key']:
-    raise ValueError("请在.env文件中设置STANDX_PRIVATE_KEY环境变量")
+# 根据命令行参数加载对应的私钥
+STANDX_CONFIG['private_key'] = load_private_key(args.account)
 
 SYMBOL = config['symbol']
 GRID_CONFIG = config['grid']
@@ -36,7 +69,7 @@ GRID_CONFIG = config['grid']
 # 初始化日志记录器
 logger = TradingLogger(
     exchange="standx",
-    ticker=SYMBOL.replace('-', '_'),  # 将 BTC-USD 转换为 BTC_USD
+    ticker=f"{SYMBOL.replace('-', '_')}_ACC{args.account}",  # 在ticker中包含账户信息
     log_to_console=True
 )
 
@@ -272,8 +305,6 @@ def calculate_place_orders(target_long, target_short, current_long, current_shor
 def close_position_if_exists(adapter, symbol):
     """检查持仓，如果有持仓则市价平仓
     
-    注意: StandX 适配器的持仓查询接口可能未实现，此功能可能无法使用
-    
     Args:
         adapter: 适配器实例
         symbol: 交易对符号
@@ -284,7 +315,7 @@ def close_position_if_exists(adapter, symbol):
         position = adapter.get_position(symbol)
         
         if position is None:
-            print("[持仓检查] 无持仓数据（接口可能未实现或无持仓）")
+            print("[持仓检查] 无持仓")
             # logger.log("持仓查询返回None")
             return
         
@@ -404,6 +435,7 @@ def run_strategy_cycle(adapter):
 def main():
     try:
         logger.log("=== StandX 做市策略启动 ===")
+        logger.log(f"使用账户: {args.account}")
         logger.log(f"交易对: {SYMBOL}")
         logger.log(f"网格配置: {GRID_CONFIG}")
         
@@ -414,6 +446,7 @@ def main():
         sleep_interval = GRID_CONFIG.get('sleep_interval', 60)
         
         print("策略开始运行，按 Ctrl+C 停止...")
+        print(f"使用账户: {args.account}")
         print(f"休眠间隔: {sleep_interval} 秒\n")
         logger.log(f"策略开始运行，休眠间隔: {sleep_interval}秒")
         

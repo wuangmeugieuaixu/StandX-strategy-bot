@@ -285,7 +285,7 @@ def close_position_if_exists(adapter, symbol):
         
         if position is None:
             print("[持仓检查] 无持仓数据（接口可能未实现或无持仓）")
-            logger.log("持仓查询返回None")
+            # logger.log("持仓查询返回None")
             return
         
         if position.size == Decimal("0"):
@@ -351,7 +351,7 @@ def run_strategy_cycle(adapter):
     Args:
         adapter: 适配器实例
     """
-    logger.log("=== 开始策略循环 ===")
+    # logger.log("=== 开始策略循环 ===")
     
     # 优先检查并平仓，避免持仓风险
     close_position_if_exists(adapter, SYMBOL)
